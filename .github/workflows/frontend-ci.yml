@@ -4,14 +4,25 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
+    name: Build & Push to ECR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -24,13 +35,35 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to Amazon ECR
+      - name: Build and push image to Amazon ECR
         id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: mandigo-frontend
-          IMAGE_TAG: ${{ github.sha }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/mandigo-frontend:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/mandigo-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Print GitOps update instructions
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "===================================================================="
+          echo " Image pushed to ECR successfully."
+          echo "===================================================================="
+          echo ""
+          echo " New image tag:"
+          echo "   ${{ steps.login-ecr.outputs.registry }}/mandigo-frontend:${{ github.sha }}"
+          echo ""
+          echo " Next step (GitOps):"
+          echo "   1. Open mandigo-gitops/k8s/frontend/deployment.yaml"
+          echo "   2. Replace the 'image:' line with the tag above"
+          echo "   3. git commit + push -> ArgoCD will sync"
+          echo ""
+          echo " Note: EC2 cronjob (ecr-sync.sh) pre-pulls new images every 10 min."
+          echo "       If ArgoCD shows ImagePullBackOff briefly, wait one cron cycle."
+          echo "===================================================================="
