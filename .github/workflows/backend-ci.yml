@@ -1,0 +1,172 @@
+name: 'CI - Build & Push Backend'
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: mandigo-backend-api
+  GITOPS_REPO: theradheshyampatil/mandigo-gitops
+  DEPLOYMENT_FILE: k8s/backend/deployment.yaml
+  BUILD_CONTEXT: ./backend
+  DOCKERFILE: ./backend/Dockerfile
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build the Hono API into a Docker image and push it to ECR with both
+  # a unique :<sha> tag and a rolling :latest tag.
+  # ---------------------------------------------------------------------------
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image_uri: ${{ steps.image.outputs.uri }}
+      registry: ${{ steps.login-ecr.outputs.registry }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image to Amazon ECR
+        id: build-image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          provenance: false
+
+      - name: Export full image URI for downstream jobs
+        id: image
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Backend image pushed::${IMAGE_URI}"
+
+  # ---------------------------------------------------------------------------
+  # Auto-bump the image tag in mandigo-gitops/k8s/backend/deployment.yaml
+  # so ArgoCD picks up the new build with no manual SSH/vi steps.
+  # ---------------------------------------------------------------------------
+  update-gitops:
+    name: Bump GitOps deployment manifest
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout mandigo-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_PAT }}
+          ref: main
+          persist-credentials: true
+
+      - name: Update deployment.yaml image tag
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+        run: |
+          set -euo pipefail
+
+          echo "New image URI: ${IMAGE_URI}"
+          echo "Target file:   ${DEPLOYMENT_FILE}"
+          echo ""
+
+          if [ ! -f "${DEPLOYMENT_FILE}" ]; then
+            echo "::error::${DEPLOYMENT_FILE} does not exist yet."
+            echo "::error::Merge the matching k8s/backend/*.yaml PR on mandigo-gitops first."
+            exit 1
+          fi
+
+          echo "--- BEFORE ---"
+          grep -E "^\s+image:" "${DEPLOYMENT_FILE}" || true
+
+          # Match `image: <registry>/mandigo-backend-api:<tag>` and rewrite
+          # the WHOLE line with the new full URI. '|' as sed delimiter so we
+          # don't need to escape '/' in the URI.
+          sed -i -E "s|^(\s*image:\s*).*/${ECR_REPOSITORY}:.*$|\1${IMAGE_URI}|" "${DEPLOYMENT_FILE}"
+
+          echo ""
+          echo "--- AFTER ---"
+          grep -E "^\s+image:" "${DEPLOYMENT_FILE}"
+
+          if ! grep -qF "${IMAGE_URI}" "${DEPLOYMENT_FILE}"; then
+            echo "::error::Failed to update image tag in ${DEPLOYMENT_FILE}"
+            exit 1
+          fi
+
+      - name: Commit and push
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+          COMMIT_MSG_BODY: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name  "github-actions[bot]"
+
+          git add "${DEPLOYMENT_FILE}"
+
+          if git diff --staged --quiet; then
+            echo "::notice::deployment.yaml already at this image tag — nothing to commit"
+            exit 0
+          fi
+
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          git commit -m "deploy(backend): bump to ${SHORT_SHA}" \
+                     -m "Source commit: ${GITHUB_SHA}" \
+                     -m "Source repo: https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
+                     -m "Image: ${IMAGE_URI}" \
+                     -m "Triggered by:" \
+                     -m "${COMMIT_MSG_BODY}"
+
+          git push origin main
+
+          echo "::notice title=Backend GitOps bumped::ArgoCD should sync within ~30s"
+
+      - name: Print deploy summary
+        if: always()
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+        run: |
+          echo "===================================================================="
+          echo " Backend auto-deploy chain"
+          echo "===================================================================="
+          echo ""
+          echo " Image:        ${IMAGE_URI}"
+          echo " GitOps repo:  https://github.com/${GITOPS_REPO}"
+          echo " Manifest:     ${DEPLOYMENT_FILE}"
+          echo ""
+          echo " Live endpoint: https://api.projectbyradhe.xyz/healthz"
+          echo "===================================================================="
