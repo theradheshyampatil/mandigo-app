@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
   workflow_dispatch:
 
 concurrency:
@@ -15,6 +18,9 @@ env:
   ECR_REPOSITORY: mandigo-frontend
   GITOPS_REPO: theradheshyampatil/mandigo-gitops
   DEPLOYMENT_FILE: k8s/frontend/deployment.yaml
+  # Monorepo: the Vite/React app lives in ./frontend
+  BUILD_CONTEXT: ./frontend
+  DOCKERFILE: ./frontend/Dockerfile
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -52,8 +58,8 @@ jobs:
         id: build-image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
           push: true
           platforms: linux/amd64
           tags: |
