@@ -10,12 +10,25 @@ concurrency:
   group: frontend-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: mandigo-frontend
+  GITOPS_REPO: theradheshyampatil/mandigo-gitops
+  DEPLOYMENT_FILE: k8s/frontend/deployment.yaml
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Build the Vite/React SPA into a Docker image and push it to ECR with both
+  # a unique :<sha> tag and a rolling :latest tag.
+  # ---------------------------------------------------------------------------
   build-and-push:
     name: Build & Push to ECR
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      image_uri: ${{ steps.image.outputs.uri }}
+      registry: ${{ steps.login-ecr.outputs.registry }}
 
     steps:
       - name: Checkout Code
@@ -29,7 +42,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -44,26 +57,111 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/mandigo-frontend:${{ github.sha }}
-            ${{ steps.login-ecr.outputs.registry }}/mandigo-frontend:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
 
-      - name: Print GitOps update instructions
+      - name: Export full image URI for downstream jobs
+        id: image
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Image pushed::${IMAGE_URI}"
+
+  # ---------------------------------------------------------------------------
+  # Auto-bump the image tag in mandigo-gitops/k8s/frontend/deployment.yaml
+  # so ArgoCD picks up the new build without any manual SSH/vi steps.
+  # ---------------------------------------------------------------------------
+  update-gitops:
+    name: Bump GitOps deployment manifest
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout mandigo-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_PAT }}
+          ref: main
+          persist-credentials: true
+
+      - name: Update deployment.yaml image tag
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+        run: |
+          set -euo pipefail
+
+          echo "New image URI: ${IMAGE_URI}"
+          echo "Target file:   ${DEPLOYMENT_FILE}"
+          echo ""
+          echo "--- BEFORE ---"
+          grep -E "^\s+image:" "${DEPLOYMENT_FILE}" || true
+
+          # Match any line of the form `image: <registry>/mandigo-frontend:<tag>`
+          # and rewrite the WHOLE line with the new full URI. Uses '|' as the
+          # sed delimiter so we don't have to escape '/' in the URI.
+          sed -i -E "s|^(\s*image:\s*).*/${ECR_REPOSITORY}:.*$|\1${IMAGE_URI}|" "${DEPLOYMENT_FILE}"
+
+          echo ""
+          echo "--- AFTER ---"
+          grep -E "^\s+image:" "${DEPLOYMENT_FILE}"
+
+          # If sed couldn't find the pattern, the file is unchanged. Fail loudly.
+          if ! grep -qF "${IMAGE_URI}" "${DEPLOYMENT_FILE}"; then
+            echo "::error::Failed to update image tag in ${DEPLOYMENT_FILE}"
+            exit 1
+          fi
+
+      - name: Commit and push
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+          COMMIT_MSG_BODY: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name  "github-actions[bot]"
+
+          git add "${DEPLOYMENT_FILE}"
+
+          if git diff --staged --quiet; then
+            echo "::notice::deployment.yaml already at this image tag — nothing to commit"
+            exit 0
+          fi
+
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          git commit -m "deploy(frontend): bump to ${SHORT_SHA}" \
+                     -m "Source commit: ${GITHUB_SHA}" \
+                     -m "Source repo: https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
+                     -m "Image: ${IMAGE_URI}" \
+                     -m "Triggered by:" \
+                     -m "${COMMIT_MSG_BODY}"
+
+          git push origin main
+
+          echo "::notice title=GitOps bumped::ArgoCD should sync within ~30s"
+
+      - name: Print deploy summary
+        if: always()
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
         run: |
           echo "===================================================================="
-          echo " Image pushed to ECR successfully."
+          echo " Auto-deploy chain status"
           echo "===================================================================="
           echo ""
-          echo " New image tag:"
-          echo "   ${{ steps.login-ecr.outputs.registry }}/mandigo-frontend:${{ github.sha }}"
+          echo " Image:        ${IMAGE_URI}"
+          echo " GitOps repo:  https://github.com/${GITOPS_REPO}"
+          echo " Manifest:     ${DEPLOYMENT_FILE}"
           echo ""
-          echo " Next step (GitOps):"
-          echo "   1. Open mandigo-gitops/k8s/frontend/deployment.yaml"
-          echo "   2. Replace the 'image:' line with the tag above"
-          echo "   3. git commit + push -> ArgoCD will sync"
+          echo " What happens next (without any manual action):"
+          echo "   1. ArgoCD detects the gitops commit (~30s polling cycle)"
+          echo "   2. K3s rolls the deployment"
+          echo "   3. ecr-sync.sh has already pre-pulled the image (cron, every 10 min)"
+          echo "      so the pod starts cleanly without K3s hitting ECR auth"
           echo ""
-          echo " Note: EC2 cronjob (ecr-sync.sh) pre-pulls new images every 10 min."
-          echo "       If ArgoCD shows ImagePullBackOff briefly, wait one cron cycle."
+          echo " Live site: https://projectbyradhe.xyz"
           echo "===================================================================="
