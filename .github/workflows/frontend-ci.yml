@@ -21,6 +21,10 @@ env:
   # Monorepo: the Vite/React app lives in ./frontend
   BUILD_CONTEXT: ./frontend
   DOCKERFILE: ./frontend/Dockerfile
+  # PR #8: point the SPA at the real backend at build time. Vite inlines
+  # this into the static bundle as `import.meta.env.VITE_API_URL`.
+  # To roll back to mocks, set this to an empty string here.
+  VITE_API_URL: https://api.projectbyradhe.xyz/api/v1
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -62,6 +66,8 @@ jobs:
           file: ${{ env.DOCKERFILE }}
           push: true
           platforms: linux/amd64
+          build-args: |
+            VITE_API_URL=${{ env.VITE_API_URL }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
