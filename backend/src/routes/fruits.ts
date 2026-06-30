@@ -1,29 +1,36 @@
 import { Hono } from 'hono';
-import { mockFruits } from '../data/mockFruits.js';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { fruits } from '../db/schema.js';
 
 /**
- * /api/v1/fruits
+ * /api/v1/fruits — backed by Postgres via Drizzle ORM as of PR #6.
  *
- * v0 contract (mock backed):
- *   GET  /              -> { fruits: Fruit[] }
- *   GET  /:id           -> Fruit  (404 if not found)
+ *   GET  /          -> { fruits: Fruit[], count: number }
+ *   GET  /:id       -> Fruit  (404 if not found)
  *
- * v1 (PR #6) will replace mockFruits with Drizzle queries against the
- * `fruits` table in Postgres. Request/response shape stays identical so
- * the frontend doesn't need a coordinated change.
+ * Drizzle's `db.select()` returns fully-typed rows — try hovering over
+ * `allFruits` or `fruit` below in your editor; TS infers each field from
+ * the schema in src/db/schema.ts. No DTO boilerplate, no manual mapping.
  */
 export const fruitsRoute = new Hono();
 
-fruitsRoute.get('/', (c) => {
+fruitsRoute.get('/', async (c) => {
+  const allFruits = await db.select().from(fruits);
   return c.json({
-    fruits: mockFruits,
-    count: mockFruits.length,
+    fruits: allFruits,
+    count: allFruits.length,
   });
 });
 
-fruitsRoute.get('/:id', (c) => {
+fruitsRoute.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const fruit = mockFruits.find((f) => f.id === id);
+
+  const [fruit] = await db
+    .select()
+    .from(fruits)
+    .where(eq(fruits.id, id))
+    .limit(1);
 
   if (!fruit) {
     return c.json({ error: 'Fruit not found', id }, 404);
