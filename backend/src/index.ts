@@ -5,22 +5,20 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 
 import { env, corsOrigins } from './lib/env.js';
+import { closeDb } from './db/client.js';
+import { runMigrations, waitForDb } from './db/migrate.js';
+import { seedFruitsIfEmpty } from './db/seed.js';
 import { healthzRoute } from './routes/healthz.js';
+import { readyzRoute } from './routes/readyz.js';
 import { fruitsRoute } from './routes/fruits.js';
 
 const app = new Hono();
 
 // --- Global middleware ----------------------------------------------------
 
-// Structured request logs (method, path, status, duration). Pino will
-// supersede this in a later PR when we wire up centralised logging.
 app.use('*', logger());
-
-// Common security headers (X-Frame-Options, X-Content-Type-Options, etc.)
 app.use('*', secureHeaders());
 
-// CORS: allow the production frontend AND local Vite dev server by default.
-// Override via env var CORS_ORIGINS (comma-separated).
 app.use(
   '/api/*',
   cors({
@@ -33,13 +31,13 @@ app.use(
 
 // --- Routes ---------------------------------------------------------------
 
-// Liveness/readiness — outside /api so K8s probes don't trip CORS.
+// Probes — outside /api so K8s probes don't trip CORS.
 app.route('/healthz', healthzRoute);
+app.route('/readyz', readyzRoute);
 
 // API v1 surface
 app.route('/api/v1/fruits', fruitsRoute);
 
-// Root: simple identification ping (useful when curl'ing from EC2)
 app.get('/', (c) =>
   c.json({
     service: 'mandigo-backend-api',
@@ -56,32 +54,56 @@ app.onError((err, c) => {
   return c.json({ error: 'Internal server error' }, 500);
 });
 
-// --- Boot -----------------------------------------------------------------
+// --- Boot sequence --------------------------------------------------------
+//
+// The order matters:
+//   1. waitForDb           - retry SELECT 1 until Postgres accepts us
+//   2. runMigrations       - apply pending /app/migrations/*.sql
+//   3. seedFruitsIfEmpty   - one-shot insert if table is empty
+//   4. serve               - bind the port; readiness probe will now pass
+//
+// If any of steps 1-3 throws, the process exits and K8s restarts the pod.
+// That's intentional - the pod is not ready to serve traffic if any of
+// these failed, and a fresh attempt is usually all it takes (e.g. DB pod
+// is still booting on a fresh EC2 start).
 
-const port = env.PORT;
-
-serve(
-  {
-    fetch: app.fetch,
-    port,
-  },
-  (info) => {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[boot] mandigo-backend-api listening on http://0.0.0.0:${info.port} (NODE_ENV=${env.NODE_ENV})`
-    );
+async function main() {
+  try {
+    await waitForDb();
+    await runMigrations();
+    await seedFruitsIfEmpty();
+  } catch (err) {
+    console.error('[boot] initialisation failed:', err);
+    process.exit(1);
   }
-);
 
-// Graceful shutdown so K8s rolling updates don't drop in-flight requests
-const shutdown = (signal: string) => {
-  // eslint-disable-next-line no-console
+  serve(
+    {
+      fetch: app.fetch,
+      port: env.PORT,
+    },
+    (info) => {
+      console.log(
+        `[boot] mandigo-backend-api listening on http://0.0.0.0:${info.port} (NODE_ENV=${env.NODE_ENV})`
+      );
+    }
+  );
+}
+
+// --- Graceful shutdown ----------------------------------------------------
+
+const shutdown = async (signal: string) => {
   console.log(`[shutdown] received ${signal}, draining...`);
-  // Hono's @hono/node-server returns no explicit close handle; rely on
-  // process termination after request drain. K8s sends SIGTERM with a
-  // terminationGracePeriodSeconds window (default 30s) which is enough
-  // for short request lifetimes.
+  try {
+    await closeDb();
+  } catch (err) {
+    console.error('[shutdown] error closing db:', err);
+  }
   process.exit(0);
 };
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
+// Top-level await would also work since "type": "module", but a named
+// async main() makes the error path explicit.
+void main();

@@ -6,9 +6,7 @@ import { z } from 'zod';
  * malformed, the process crashes with a clear error message BEFORE the
  * server starts accepting traffic.
  *
- * Add new env vars here as the API grows. Optional vars will be filled in
- * by later PRs:
- *   - DATABASE_URL    (PR #6 - Drizzle + Postgres)
+ * Optional vars are filled in by later PRs:
  *   - AUTH_SECRET     (PR #7 - Better Auth session signing)
  *   - GOOGLE_CLIENT_*  (PR #7 - Google OAuth)
  *   - MSG91_AUTH_KEY  (PR #7 - phone OTP)
@@ -21,13 +19,13 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
 
   // Comma-separated list of allowed origins for CORS.
-  // Default covers the production frontend + Vite dev server.
   CORS_ORIGINS: z
     .string()
     .default('https://projectbyradhe.xyz,http://localhost:5173'),
 
-  // To be required in PR #6 once Drizzle is wired up.
-  DATABASE_URL: z.string().url().optional(),
+  // REQUIRED — backend cannot start without a database to talk to.
+  // Cross-namespace DNS: postgresql://user:pw@<svc>.<namespace>.svc.cluster.local:5432/<db>
+  DATABASE_URL: z.string().url(),
 
   // To be required in PR #7 once Better Auth lands.
   AUTH_SECRET: z.string().min(32).optional(),
@@ -36,7 +34,7 @@ const EnvSchema = z.object({
 function parseEnv() {
   const result = EnvSchema.safeParse(process.env);
   if (!result.success) {
-    console.error('Invalid environment variables:');
+    console.error('[env] Invalid environment variables:');
     console.error(result.error.flatten().fieldErrors);
     process.exit(1);
   }
