@@ -9,6 +9,7 @@ export function SiteHeader() {
     { to: "/marketplace", label: "Marketplace" },
     { to: "/sell", label: "Sell on MandiGo" },
     { to: "/dashboard", label: "Dashboard" },
+    { to: "/about", label: "About" },
   ] as const;
 
   return (
