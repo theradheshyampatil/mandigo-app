@@ -436,6 +436,21 @@ function RuntimeDiagram() {
         EC2 · K3s cluster · ap-south-1
       </text>
 
+      {/* ArgoCD namespace */}
+      <rect
+        x="210"
+        y="90"
+        width="400"
+        height="70"
+        rx="12"
+        fill="oklch(0.97 0.02 200)"
+        stroke="oklch(0.85 0.04 200)"
+        strokeWidth="1"
+      />
+      <text x="225" y="110" fontSize="11" fill="oklch(0.5 0.06 200)" fontWeight="600">
+        namespace: argocd
+      </text>
+
       {/* Database namespace */}
       <rect
         x="630"
@@ -483,8 +498,22 @@ function RuntimeDiagram() {
 
       {/* === Nodes === */}
 
+      {/* GitHub */}
+      <Node x={20} y={90} width={130} height={50} label="GitHub" sub="mandigo-gitops" />
+
       {/* Browser */}
       <Node x={20} y={180} width={130} height={60} label="Browser" sub="React 19 SPA" />
+
+      {/* ArgoCD */}
+      <Node
+        x={420}
+        y={100}
+        width={170}
+        height={50}
+        label="ArgoCD"
+        sub="GitOps Controller"
+        accent
+      />
 
       {/* Traefik */}
       <Node
@@ -541,7 +570,10 @@ function RuntimeDiagram() {
 
       {/* === Edges with animated dots === */}
 
+      <Edge d="M 150 115 L 420 125" label="watches" dashed />
       <Edge d="M 150 210 L 240 230" label="HTTPS" />
+      <Edge d="M 310 210 L 420 135" label="" />
+      <Edge d="M 505 150 L 505 170" label="" hide />
       <Edge d="M 310 270 L 310 320" label="" />
       <Edge d="M 380 270 L 420 350" label="" />
       <Edge d="M 590 350 L 660 345" label="pg pool" />
@@ -550,6 +582,15 @@ function RuntimeDiagram() {
 
       {/* === Static labels === */}
 
+      <text x="280" y="115" fontSize="9" fill="oklch(0.55 0.02 80)">
+        polls manifests
+      </text>
+      <text x="360" y="185" fontSize="9" fill="oklch(0.55 0.02 80)">
+        argocd.projectbyradhe.xyz
+      </text>
+      <text x="515" y="165" fontSize="9" fill="oklch(0.55 0.02 80)">
+        syncs resources
+      </text>
       <text x="170" y="200" fontSize="9" fill="oklch(0.55 0.02 80)">
         TLS handshake
       </text>
