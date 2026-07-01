@@ -7,7 +7,9 @@ import {
   jsonb,
   timestamp,
   index,
+  pgEnum,
 } from 'drizzle-orm/pg-core';
+import { nanoid } from 'nanoid';
 
 /**
  * Price tier — discount as buyer quantity grows.
@@ -18,6 +20,19 @@ export interface PriceTier {
   minQtyKg: number;
   pricePerKg: number;
 }
+
+export const roleEnum = pgEnum('role', ['BUYER', 'SELLER']);
+
+export const users = pgTable('users', {
+  id: text('id').primaryKey().$defaultFn(() => nanoid(10)),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: roleEnum('role').notNull().default('BUYER'),
+  name: text('name').notNull(),
+  companyName: text('company_name'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /**
  * fruits — the catalog of fruits offered on the marketplace.
@@ -90,3 +105,5 @@ export const fruits = pgTable(
 // Inferred TS types — use these in route handlers, services, etc.
 export type Fruit = typeof fruits.$inferSelect;
 export type NewFruit = typeof fruits.$inferInsert;
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;

@@ -1,10 +1,13 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Apple, Menu } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
 
 export function SiteHeader() {
   const [open, setOpen] = useState(false);
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const links = [
     { to: "/marketplace", label: "Marketplace" },
     { to: "/sell", label: "Sell on MandiGo" },
@@ -40,9 +43,20 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-2 md:flex">
-          <Button asChild variant="ghost" size="sm">
-            <Link to="/login">Login</Link>
-          </Button>
+          {user ? (
+            <>
+              <div className="text-sm font-medium mr-2">
+                Hello, {user.name.split(' ')[0]}
+              </div>
+              <Button size="sm" variant="outline" onClick={() => { logout(); navigate({ to: '/' }); }}>
+                Logout
+              </Button>
+            </>
+          ) : (
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/login">Login</Link>
+            </Button>
+          )}
           <Button asChild size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90">
             <Link to="/marketplace">Browse fruits</Link>
           </Button>
@@ -70,13 +84,22 @@ export function SiteHeader() {
                 {l.label}
               </Link>
             ))}
-            <Link
-              to="/login"
-              onClick={() => setOpen(false)}
-              className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary"
-            >
-              Login
-            </Link>
+            {user ? (
+              <button
+                onClick={() => { logout(); setOpen(false); navigate({ to: '/' }); }}
+                className="rounded-md px-3 py-2 text-left text-sm font-medium text-muted-foreground hover:bg-secondary"
+              >
+                Logout
+              </button>
+            ) : (
+              <Link
+                to="/login"
+                onClick={() => setOpen(false)}
+                className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary"
+              >
+                Login
+              </Link>
+            )}
           </div>
         </div>
       )}
