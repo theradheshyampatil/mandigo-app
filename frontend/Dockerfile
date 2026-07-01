@@ -27,13 +27,8 @@ COPY package*.json ./
 # Use `npm ci` when a lockfile exists (deterministic, faster, CI-friendly).
 # Fall back to `npm install` for the transitional skeleton before Lovable's
 # export brings its own package-lock.json.
-RUN if [ -f package-lock.json ]; then \
-      echo ">>> Lockfile found: running npm ci" && \
-      npm ci --no-audit --no-fund; \
-    else \
-      echo ">>> No lockfile: running npm install" && \
-      npm install --no-audit --no-fund; \
-    fi
+RUN echo ">>> Force running npm install with legacy peer deps" && \
+    npm install --no-audit --no-fund --legacy-peer-deps
 
 # Copy the rest of the source tree (respects .dockerignore)
 COPY . .

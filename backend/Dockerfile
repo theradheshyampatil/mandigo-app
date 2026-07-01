@@ -11,13 +11,8 @@ WORKDIR /app
 
 # Install all deps (incl. dev: tsx, typescript, @types/node, drizzle-kit)
 COPY package*.json ./
-RUN if [ -f package-lock.json ]; then \
-      echo ">>> Lockfile found: running npm ci" && \
-      npm ci --no-audit --no-fund; \
-    else \
-      echo ">>> No lockfile: running npm install" && \
-      npm install --no-audit --no-fund; \
-    fi
+RUN echo ">>> Force running npm install with legacy peer deps" && \
+    npm install --no-audit --no-fund --legacy-peer-deps
 
 # Copy source and tsconfig, compile to /app/dist
 COPY tsconfig.json ./
@@ -33,11 +28,8 @@ ENV PORT=3000
 
 # Install ONLY production deps (drops drizzle-kit, tsx, typescript, etc.)
 COPY package*.json ./
-RUN if [ -f package-lock.json ]; then \
-      npm ci --omit=dev --no-audit --no-fund; \
-    else \
-      npm install --omit=dev --no-audit --no-fund; \
-    fi && \
+RUN echo ">>> Force running npm install with legacy peer deps (prod)" && \
+    npm install --omit=dev --no-audit --no-fund --legacy-peer-deps && \
     npm cache clean --force
 
 # Copy the compiled JS from the builder stage
