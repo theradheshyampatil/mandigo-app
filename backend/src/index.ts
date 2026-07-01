@@ -11,6 +11,7 @@ import { seedFruitsIfEmpty } from './db/seed.js';
 import { healthzRoute } from './routes/healthz.js';
 import { readyzRoute } from './routes/readyz.js';
 import { fruitsRoute } from './routes/fruits.js';
+import { authRouter } from './routes/auth.js';
 
 const app = new Hono();
 
@@ -36,7 +37,10 @@ app.route('/healthz', healthzRoute);
 app.route('/readyz', readyzRoute);
 
 // API v1 surface
-app.route('/api/v1/fruits', fruitsRoute);
+const api = new Hono();
+api.route('/fruits', fruitsRoute);
+api.route('/auth', authRouter);
+app.route('/api/v1', api);
 
 app.get('/', (c) =>
   c.json({
